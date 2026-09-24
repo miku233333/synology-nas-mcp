@@ -12,6 +12,7 @@ license = "MIT"
 dependencies = [
   "httpx>=0.28,<1",
   "mcp==2.2.0",
+  "pyjwt[crypto]>=2.10,<3",
   "pypdf>=6.19,<8",
   "uvicorn>=0.35,<1",
 ]

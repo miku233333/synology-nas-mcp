@@ -30,6 +30,21 @@ def _secret(name: str) -> str:
     return value
 
 
+def _https_url(name: str, value: str, *, path: str | None = None) -> None:
+    url = urlsplit(value)
+    if (
+        any(ord(char) < 33 or ord(char) == 127 for char in value)
+        or url.scheme != "https"
+        or not url.hostname
+        or url.username
+        or url.password
+        or url.query
+        or url.fragment
+        or (path is not None and url.path != path)
+    ):
+        raise ValueError(f"{name} must be an HTTPS URL without credentials or query parameters")
+
+
 @dataclass(frozen=True)
 class Settings:
     data_root: Path = Path("/data")
@@ -37,6 +52,15 @@ class Settings:
     host: str = "0.0.0.0"
     port: int = 8000
     auth_token: str = field(default="", repr=False)
+    auth_mode: str = "private-bearer"
+    oauth_issuer_url: str = ""
+    oauth_jwks_url: str = ""
+    oauth_resource_url: str = ""
+    oauth_allowed_subjects: tuple[str, ...] = ()
+    oauth_required_scope: str = "nas.read"
+    cf_access_issuer_url: str = ""
+    cf_access_audience: str = ""
+    cf_access_allowed_emails: tuple[str, ...] = ()
     allowed_hosts: tuple[str, ...] = (
         "localhost:*",
         "127.0.0.1:*",
@@ -64,6 +88,23 @@ class Settings:
             host=os.environ.get("MCP_HOST", "0.0.0.0"),
             port=_integer("MCP_PORT", 8000, 1, 65535),
             auth_token=_secret("MCP_AUTH_TOKEN"),
+            auth_mode=os.environ.get("MCP_AUTH_MODE", "private-bearer"),
+            oauth_issuer_url=os.environ.get("MCP_OAUTH_ISSUER_URL", ""),
+            oauth_jwks_url=os.environ.get("MCP_OAUTH_JWKS_URL", ""),
+            oauth_resource_url=os.environ.get("MCP_OAUTH_RESOURCE_URL", ""),
+            oauth_allowed_subjects=tuple(
+                item.strip()
+                for item in os.environ.get("MCP_OAUTH_ALLOWED_SUBJECTS", "").split(",")
+                if item.strip()
+            ),
+            oauth_required_scope=os.environ.get("MCP_OAUTH_REQUIRED_SCOPE", "nas.read"),
+            cf_access_issuer_url=os.environ.get("MCP_CF_ACCESS_ISSUER_URL", ""),
+            cf_access_audience=os.environ.get("MCP_CF_ACCESS_AUDIENCE", ""),
+            cf_access_allowed_emails=tuple(
+                item.strip()
+                for item in os.environ.get("MCP_CF_ACCESS_ALLOWED_EMAILS", "").split(",")
+                if item.strip()
+            ),
             allowed_hosts=tuple(
                 item.strip()
                 for item in os.environ.get(
@@ -94,10 +135,66 @@ class Settings:
     def validate(self) -> None:
         if self.transport not in {"stdio", "streamable-http"}:
             raise ValueError("MCP_TRANSPORT must be stdio or streamable-http")
-        if self.transport == "streamable-http" and (
-            len(self.auth_token) < 32
-            or not self.auth_token.isascii()
-            or any(c.isspace() or ord(c) < 33 or ord(c) == 127 for c in self.auth_token)
+        if self.auth_mode not in {"private-bearer", "oauth", "cloudflare-access"}:
+            raise ValueError("MCP_AUTH_MODE must be private-bearer, oauth or cloudflare-access")
+        if self.auth_mode == "oauth":
+            if self.transport != "streamable-http":
+                raise ValueError("MCP_AUTH_MODE=oauth requires streamable-http")
+            if not all(
+                (
+                    self.oauth_issuer_url,
+                    self.oauth_jwks_url,
+                    self.oauth_resource_url,
+                    self.oauth_allowed_subjects,
+                )
+            ):
+                raise ValueError("OAuth requires issuer, JWKS, resource URL and allowed subjects")
+            _https_url("MCP_OAUTH_ISSUER_URL", self.oauth_issuer_url)
+            _https_url("MCP_OAUTH_JWKS_URL", self.oauth_jwks_url)
+            _https_url("MCP_OAUTH_RESOURCE_URL", self.oauth_resource_url, path="/mcp")
+            issuer = urlsplit(self.oauth_issuer_url)
+            jwks = urlsplit(self.oauth_jwks_url)
+            if (issuer.hostname, issuer.port or 443) != (jwks.hostname, jwks.port or 443):
+                raise ValueError("MCP_OAUTH_JWKS_URL must share the issuer origin")
+            if not self.oauth_required_scope or any(
+                char.isspace() for char in self.oauth_required_scope
+            ):
+                raise ValueError("MCP_OAUTH_REQUIRED_SCOPE must be one scope")
+        if self.auth_mode == "cloudflare-access":
+            if self.transport != "streamable-http":
+                raise ValueError("MCP_AUTH_MODE=cloudflare-access requires streamable-http")
+            if not all(
+                (
+                    self.cf_access_issuer_url,
+                    self.cf_access_audience,
+                    self.cf_access_allowed_emails,
+                )
+            ):
+                raise ValueError("Cloudflare Access requires issuer, audience and allowed emails")
+            _https_url("MCP_CF_ACCESS_ISSUER_URL", self.cf_access_issuer_url, path="")
+            issuer = urlsplit(self.cf_access_issuer_url)
+            team_name = issuer.hostname.removesuffix(".cloudflareaccess.com")
+            if not team_name or team_name == issuer.hostname:
+                raise ValueError("MCP_CF_ACCESS_ISSUER_URL must be a Cloudflare Access team domain")
+            if (
+                len(self.cf_access_audience) > 256
+                or not self.cf_access_audience.isascii()
+                or any(ord(char) < 33 or ord(char) == 127 for char in self.cf_access_audience)
+            ):
+                raise ValueError("MCP_CF_ACCESS_AUDIENCE must be one audience tag")
+            if any(
+                "@" not in email or any(char.isspace() for char in email)
+                for email in self.cf_access_allowed_emails
+            ):
+                raise ValueError("MCP_CF_ACCESS_ALLOWED_EMAILS must contain email addresses")
+        if (
+            self.transport == "streamable-http"
+            and self.auth_mode == "private-bearer"
+            and (
+                len(self.auth_token) < 32
+                or not self.auth_token.isascii()
+                or any(c.isspace() or ord(c) < 33 or ord(c) == 127 for c in self.auth_token)
+            )
         ):
             raise ValueError("MCP_AUTH_TOKEN must contain at least 32 printable ASCII characters")
         if not self.allowed_hosts or any("/" in host for host in self.allowed_hosts):

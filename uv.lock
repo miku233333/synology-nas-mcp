@@ -744,6 +744,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pypdf" },
     { name = "uvicorn" },
 ]
@@ -759,6 +760,7 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mcp", specifier = "==2.2.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "pypdf", specifier = ">=6.19,<8" },
     { name = "uvicorn", specifier = ">=0.35,<1" },
 ]
