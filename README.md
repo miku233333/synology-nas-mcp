@@ -76,6 +76,8 @@ OpenAI Secure MCP Tunnel 是可選的傳輸元件；MCP 本身不需要 OpenAI A
 
 Tunnel 由 NAS 主動向 OpenAI 連線；NAS 須能連到 `api.openai.com:443`。不需要將 DSM 或 MCP 公開到網際網路。Mac 關機不影響 NAS 上的服務。
 
+Tunnel 的 OpenAI API 控制面亦受[支援國家及地區](https://help.openai.com/en/articles/5347006-openai-api-supported-countries-and-territories)限制。若容器日誌出現 `403 unsupported_country_region_territory`，代表目前部署出口不受支援；應停止 Tunnel 並確認部署資格，不能將容器啟動成功視為已連通。
+
 ChatGPT 功能取決於帳戶、Developer mode 與 workspace 權限。官方開發者文件和 Help Center 對個人方案的寫入支援描述不完全一致，請以實際帳戶驗證，不把建立連接視為所有操作已可用。
 
 參考：[Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)、[Developer mode](https://developers.openai.com/api/docs/guides/developer-mode)、[Help Center](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)。
