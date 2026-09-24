@@ -6,7 +6,7 @@ Self-hosted MCP access to Synology NAS files, monitoring, containers and downloa
 
 Synology NAS 的自架 MCP 服務。在 Container Manager 執行，透過 MCP 客戶端讀取文件、查詢 NAS 狀態，並按需啟用容器及下載操作。支援 Streamable HTTP、stdio，以及可選的 OpenAI Secure MCP Tunnel。
 
-**Alpha：具備自動化測試；Synology DSM／套件相容性及 ChatGPT 連通仍需實機驗證。** 本專案為社群專案，與 Synology、OpenAI 沒有隸屬關係。
+**Alpha：MCP 連線、檔案讀取與容器部署已於 DS720+／DSM 7.3 實機驗證；DSM API 工具與 ChatGPT 連通仍待驗證。** 本專案為社群專案，與 Synology、OpenAI 沒有隸屬關係。
 
 ## 功能
 
