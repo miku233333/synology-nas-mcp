@@ -1,0 +1,32 @@
+services:
+  cloudflared:
+    profiles: [cloudflare]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    init: true
+    user: "${NAS_UID:-1000}:${NAS_GID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/cloudflare-token
+    volumes:
+      - type: bind
+        source: ${CLOUDFLARE_TUNNEL_TOKEN_FILE:?Set path to the tunnel token file}
+        target: /run/secrets/cloudflare-token
+        read_only: true
+        bind:
+          create_host_path: false
+    command: tunnel --no-autoupdate run
+    depends_on:
+      nas-mcp:
+        condition: service_healthy
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"

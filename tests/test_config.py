@@ -12,6 +12,47 @@ def test_http_requires_strong_token():
     Settings(transport="stdio").validate()
 
 
+def test_oauth_requires_scoped_https_configuration():
+    with pytest.raises(ValueError, match="OAuth requires"):
+        Settings(auth_mode="oauth").validate()
+    settings = Settings(
+        auth_mode="oauth",
+        oauth_issuer_url="https://login.example.test/",
+        oauth_jwks_url="https://login.example.test/.well-known/jwks.json",
+        oauth_resource_url="https://mcp.example.test/mcp",
+        oauth_allowed_subjects=("owner-123",),
+    )
+    settings.validate()
+    with pytest.raises(ValueError, match="issuer origin"):
+        replace(settings, oauth_jwks_url="https://other.example.test/jwks.json").validate()
+    with pytest.raises(ValueError, match="HTTPS URL"):
+        replace(settings, oauth_resource_url="http://mcp.example.test/mcp").validate()
+    with pytest.raises(ValueError, match="HTTPS URL"):
+        replace(settings, oauth_resource_url="https://mcp.example.test/other").validate()
+    with pytest.raises(ValueError, match="one scope"):
+        replace(settings, oauth_required_scope="nas.read nas.admin").validate()
+
+
+def test_cloudflare_access_requires_team_and_owner():
+    with pytest.raises(ValueError, match="Cloudflare Access requires"):
+        Settings(auth_mode="cloudflare-access").validate()
+    settings = Settings(
+        auth_mode="cloudflare-access",
+        cf_access_issuer_url="https://team.cloudflareaccess.com",
+        cf_access_audience="a" * 64,
+        cf_access_allowed_emails=("owner@example.com",),
+    )
+    settings.validate()
+    with pytest.raises(ValueError, match="Cloudflare Access team domain"):
+        replace(settings, cf_access_issuer_url="https://attacker.example").validate()
+    with pytest.raises(ValueError, match="HTTPS URL"):
+        replace(settings, cf_access_issuer_url="http://team.cloudflareaccess.com").validate()
+    with pytest.raises(ValueError, match="HTTPS URL"):
+        replace(settings, cf_access_issuer_url="https://team.cloudflareaccess.com/").validate()
+    with pytest.raises(ValueError, match="email addresses"):
+        replace(settings, cf_access_allowed_emails=("not-an-email",)).validate()
+
+
 def test_management_actions_require_scopes():
     settings = Settings(
         transport="stdio",

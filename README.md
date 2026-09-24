@@ -6,7 +6,7 @@ Self-hosted MCP access to Synology NAS files, monitoring, containers and downloa
 
 Synology NAS 的自架 MCP 服務。在 Container Manager 執行，透過 MCP 客戶端讀取文件、查詢 NAS 狀態，並按需啟用容器及下載操作。支援 Streamable HTTP、stdio，以及可選的 OpenAI Secure MCP Tunnel。
 
-**Alpha：MCP 連線、檔案讀取與容器部署已於 DS720+／DSM 7.3 實機驗證；DSM API 工具與 ChatGPT 連通仍待驗證。** 本專案為社群專案，與 Synology、OpenAI 沒有隸屬關係。
+**Alpha：MCP 連線、檔案讀取與容器部署已於 DS720+／DSM 7.3 實機驗證；DSM API 工具、公開 OAuth 接入與 ChatGPT 連通仍待驗證。** 本專案為社群專案，與 Synology、OpenAI 沒有隸屬關係。
 
 ## 功能
 
@@ -82,6 +82,49 @@ ChatGPT 功能取決於帳戶、Developer mode 與 workspace 權限。官方開�
 
 參考：[Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)、[Developer mode](https://developers.openai.com/api/docs/guides/developer-mode)、[Help Center](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)。
 
+### 公開 HTTPS 與 OAuth
+
+需要公網接入時，先完成使用者認證，再開放 HTTPS 入口。MCP 仍只接觸掛載的指定資料夾；DSM 操作仍由獨立開關控制。
+
+#### Cloudflare Tunnel 與 Access
+
+已有 Cloudflare 網域的部署者可用 [Tunnel](https://developers.cloudflare.com/tunnel/get-started/) 提供 HTTPS，並以 [Access Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/) 處理 ChatGPT 登入：
+
+1. 建立專用 Tunnel 和主機名稱，將 origin 指向同一 Compose 網路內的 `http://nas-mcp:8000`。建立僅允許自己登入的 Access 應用，啟用 Managed OAuth 及受限的動態客戶端註冊。Cloudflare 的 OAuth 探索與 401 認證要求由邊緣處理。
+2. 在 NAS 的 `.env` 填入 Access team domain、此應用的 AUD tag，以及允許登入的電郵。Tunnel token 存成 NAS 上權限 `600` 的獨立檔案，不加入 Git：
+
+   ```dotenv
+   MCP_AUTH_MODE=cloudflare-access
+   MCP_CF_ACCESS_ISSUER_URL=https://team.cloudflareaccess.com
+   MCP_CF_ACCESS_AUDIENCE=access-app-aud-tag
+   MCP_CF_ACCESS_ALLOWED_EMAILS=owner@example.com
+   CLOUDFLARE_TUNNEL_TOKEN_FILE=/volume1/docker/synology-nas-mcp-secrets/cloudflare-token
+   ```
+
+3. 執行 `docker compose -f compose.yaml -f compose.cloudflare.yaml --profile cloudflare up -d --build`。先檢查未登入請求由 Access 回覆 OAuth challenge；登入後確認只可讀取預期的測試文件。NAS 會再次驗證 Access 傳到 origin 的身分 JWT；不要把容器主機埠另外公開。
+
+#### 一般 OAuth 身分供應商
+
+也可將 MCP 切換到 OAuth 資源伺服器模式，由自己的身分供應商處理登入。以下以 Auth0 為例，其他供應商須符合 [ChatGPT 的 MCP OAuth 要求](https://developers.openai.com/plugins/build/auth)。
+
+1. 為此服務準備固定 HTTPS 網址，例如 `https://mcp.example.com/mcp`。反向代理或 Cloudflare Tunnel 只轉發到容器的 `nas-mcp:8000`，不公開 DSM 管理介面。若代理保留原始 `Host`，把 `mcp.example.com:*` 加入 `MCP_ALLOWED_HOSTS`。
+2. 在 Auth0 建立 API，其 Identifier 與 MCP 網址完全一致，並建立 `nas.read` permission。啟用 **Resource Parameter Compatibility Profile**，讓 ChatGPT 傳入的 `resource` 成為 access token 的 `aud`。建立授權碼與 PKCE S256 客戶端，僅允許自己登入；ChatGPT 的完整回跳網址須以連接設定頁顯示者為準。
+3. 在 NAS 的 `.env` 填入以下設定。`MCP_OAUTH_ALLOWED_SUBJECTS` 使用身分供應商核發的不可變 `sub`，不要填電郵。issuer 的尾斜線須與 token `iss` 完全一致。
+
+   ```dotenv
+   MCP_AUTH_MODE=oauth
+   MCP_OAUTH_ISSUER_URL=https://tenant.example/
+   MCP_OAUTH_JWKS_URL=https://tenant.example/.well-known/jwks.json
+   MCP_OAUTH_RESOURCE_URL=https://mcp.example.com/mcp
+   MCP_OAUTH_ALLOWED_SUBJECTS=provider|owner-id
+   MCP_OAUTH_REQUIRED_SCOPE=nas.read
+   MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*,nas-mcp:*,mcp.example.com:*
+   ```
+
+4. 重建 `nas-mcp` 後，先測試 OAuth 探索文件可公開取得、未帶 token 的 `/mcp` 回覆 401，且錯誤受眾、過期或其他帳戶的 token 都無法讀檔。在 ChatGPT 網頁版開啟 Developer mode，於 [Plugins](https://chatgpt.com/plugins) 加入 HTTPS MCP 網址，選 OAuth，填入身分供應商的 client ID／secret，完成登入後再測試一份已知文件。
+
+私有 Bearer 模式與 OpenAI Tunnel 仍可獨立使用。切換成公開認證模式前，不要直接把原有 Bearer 入口發佈到公網。公開網址與 OAuth 不會改變 ChatGPT 使用者的[地區資格](https://help.openai.com/en/articles/7947663-chatgpt-supported-countries)。
+
 ### 其他 MCP 客戶端／本機開發
 
 stdio 不需要 HTTP token：
@@ -104,7 +147,7 @@ services:
 docker compose -f compose.yaml -f compose.local.yaml up -d
 ```
 
-此 HTTP token 是私有部署的服務認證，沒有實作 ChatGPT 公開 MCP 所需的 OAuth 流程。若要提供公共 HTTPS 入口，必須另行加入合適的 OAuth gateway、TLS 及存取控制；不可直接公開此範例。
+此 HTTP token 是私有部署的服務認證；公開 HTTPS 入口請使用上述 OAuth 模式、TLS 及存取控制。
 
 ## DSM 管理工具
 
@@ -186,7 +229,7 @@ DSM 協定參考 Synology 官方 [DSM Login Web API Guide](https://global.downlo
 
 This is a community-maintained alpha, not an official Synology integration. Clone the repository, copy `.env.example` to `.env`, set an existing `NAS_SHARE_PATH`, a non-root UID/GID with read access, and a random `MCP_AUTH_TOKEN`. Run `docker compose up -d --build`.
 
-Files are mounted read-only. DSM credentials are optional; container and download actions require explicit switches and scopes. The optional `chatgpt` Compose profile runs OpenAI's Secure MCP Tunnel using your own Platform key and tunnel ID. It does not require public NAS ports. HTTP uses a private Bearer token; stdio also works. Public OAuth hosting is outside this deployment.
+Files are mounted read-only. DSM credentials are optional; container and download actions require explicit switches and scopes. The optional `chatgpt` Compose profile runs OpenAI's Secure MCP Tunnel using your own Platform key and tunnel ID. It does not require public NAS ports. HTTP uses a private Bearer token by default; opt-in OAuth resource-server mode supports a public HTTPS endpoint with your own identity provider. stdio also works.
 
 Reads support UTF-8 text and text extraction from PDF/DOCX, with bounded output and no OCR. Search matches filenames. Download creation accepts only restricted BTIH magnet links. NAS compatibility and ChatGPT account access require live validation. Run the commands above for local tests.
 

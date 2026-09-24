@@ -6,6 +6,7 @@ from typing import Literal
 
 import uvicorn
 from mcp.server import MCPServer
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from starlette.responses import JSONResponse
@@ -13,9 +14,11 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from synology_nas_mcp import __version__
+from synology_nas_mcp.cloudflare_access import CloudflareAccessVerifier
 from synology_nas_mcp.config import Settings
 from synology_nas_mcp.dsm import DSMClient, DSMError, NASManager
 from synology_nas_mcp.files import FileStore
+from synology_nas_mcp.oauth import OAuthTokenVerifier
 
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)
@@ -42,8 +45,51 @@ class BearerAuth:
         await self.app(scope, receive, send)
 
 
+class CloudflareAccessAuth:
+    """Accept only a signed owner assertion from Cloudflare Access."""
+
+    def __init__(self, app: ASGIApp, settings: Settings):
+        self.app = app
+        self.verifier = CloudflareAccessVerifier(settings)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = scope["headers"]
+        assertions = [value for key, value in headers if key.lower() == b"cf-access-jwt-assertion"]
+        authorizations = [value for key, value in headers if key.lower() == b"authorization"]
+        valid = len(assertions) == 1 and len(authorizations) <= 1
+        if valid and scope["path"] != "/healthz":
+            try:
+                assertion = assertions[0].decode("ascii")
+            except UnicodeDecodeError:
+                valid = False
+            else:
+                valid = await self.verifier.verify(assertion)
+        elif scope["path"] == "/healthz":
+            valid = True
+        if not valid:
+            await JSONResponse(
+                {"error": "Unauthorized"},
+                status_code=401,
+                headers={"Cache-Control": "no-store"},
+            )(scope, receive, send)
+            return
+
+        sanitized = dict(scope)
+        sanitized["headers"] = [
+            (key, value)
+            for key, value in headers
+            if key.lower() not in {b"authorization", b"cf-access-jwt-assertion", b"cookie"}
+        ]
+        await self.app(sanitized, receive, send)
+
+
 def create_server(settings: Settings) -> MCPServer:
     settings.validate()
+    oauth = settings.auth_mode == "oauth"
     files = FileStore(
         settings.data_root,
         settings.max_file_bytes,
@@ -60,6 +106,17 @@ def create_server(settings: Settings) -> MCPServer:
             "retry an operation with an unknown outcome automatically."
         ),
         log_level="WARNING",
+        auth=(
+            AuthSettings(
+                issuer_url=settings.oauth_issuer_url,
+                resource_server_url=settings.oauth_resource_url,
+                required_scopes=[settings.oauth_required_scope],
+                validate_token_resource=True,
+            )
+            if oauth
+            else None
+        ),
+        token_verifier=OAuthTokenVerifier(settings) if oauth else None,
     )
 
     def file_call(method: str, *args, **kwargs) -> dict:
@@ -171,7 +228,24 @@ def create_app(settings: Settings):
         return JSONResponse({"status": "ok", "version": __version__})
 
     app.routes.append(Route("/healthz", health, methods=["GET"]))
-    app.add_middleware(BearerAuth, token=settings.auth_token)
+    if settings.auth_mode == "oauth":
+
+        async def oauth_metadata(request):
+            return JSONResponse(
+                {
+                    "resource": settings.oauth_resource_url,
+                    "authorization_servers": [settings.oauth_issuer_url],
+                    "scopes_supported": [settings.oauth_required_scope],
+                    "bearer_methods_supported": ["header"],
+                },
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
+
+        app.routes.append(Route("/.well-known/oauth-protected-resource", oauth_metadata))
+    if settings.auth_mode == "private-bearer":
+        app.add_middleware(BearerAuth, token=settings.auth_token)
+    elif settings.auth_mode == "cloudflare-access":
+        app.add_middleware(CloudflareAccessAuth, settings=settings)
     return app
 
 
