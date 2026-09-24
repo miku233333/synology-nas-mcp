@@ -1,0 +1,72 @@
+services:
+  nas-mcp:
+    build: .
+    image: synology-nas-mcp:local
+    restart: unless-stopped
+    init: true
+    user: "${NAS_UID:-1000}:${NAS_GID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    volumes:
+      - type: bind
+        source: ${NAS_SHARE_PATH:?Set NAS_SHARE_PATH to an existing shared folder}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      NAS_DATA_ROOT: /data
+      MCP_TRANSPORT: streamable-http
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN to a random secret}
+      MCP_ALLOWED_HOSTS: localhost:*,127.0.0.1:*,nas-mcp:*
+      NAS_MAX_FILE_BYTES: ${NAS_MAX_FILE_BYTES:-2097152}
+      NAS_MAX_TEXT_CHARS: ${NAS_MAX_TEXT_CHARS:-50000}
+      NAS_MAX_SEARCH_ENTRIES: ${NAS_MAX_SEARCH_ENTRIES:-10000}
+      DSM_URL: ${DSM_URL:-}
+      DSM_USERNAME: ${DSM_USERNAME:-}
+      DSM_PASSWORD: ${DSM_PASSWORD:-}
+      DSM_CA_BUNDLE: ${DSM_CA_BUNDLE:-}
+      NAS_ENABLE_CONTAINER_ACTIONS: ${NAS_ENABLE_CONTAINER_ACTIONS:-false}
+      NAS_ALLOWED_CONTAINERS: ${NAS_ALLOWED_CONTAINERS:-}
+      NAS_ENABLE_DOWNLOAD_ACTIONS: ${NAS_ENABLE_DOWNLOAD_ACTIONS:-false}
+      NAS_DOWNLOAD_DESTINATION: ${NAS_DOWNLOAD_DESTINATION:-}
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  openai-tunnel:
+    profiles: [chatgpt]
+    image: ghcr.io/openai/tunnel-client:v0.0.14
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:-}
+      CONTROL_PLANE_TUNNEL_ID: ${CONTROL_PLANE_TUNNEL_ID:-}
+      MCP_SERVER_URL: http://nas-mcp:8000/mcp
+      MCP_EXTRA_HEADERS: "Authorization: Bearer ${MCP_AUTH_TOKEN:?Set MCP_AUTH_TOKEN}"
+      LOG_LEVEL: warn
+      LOG_FORMAT: json
+    depends_on:
+      nas-mcp:
+        condition: service_healthy
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
