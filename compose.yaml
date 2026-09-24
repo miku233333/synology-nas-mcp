@@ -10,7 +10,6 @@ services:
     security_opt: [no-new-privileges:true]
     pids_limit: 64
     mem_limit: 256m
-    cpus: 1.0
     tmpfs:
       - /tmp:size=32m,mode=1777
     volumes:
