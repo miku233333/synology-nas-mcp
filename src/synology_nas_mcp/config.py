@@ -71,6 +71,8 @@ class Settings:
     max_file_bytes: int = 2 * 1024 * 1024
     max_text_chars: int = 50_000
     max_search_entries: int = 10_000
+    status_snapshot_path: str = ""
+    status_max_age_seconds: int = 600
     dsm_url: str = ""
     dsm_username: str = ""
     dsm_password: str = field(default="", repr=False)
@@ -116,6 +118,8 @@ class Settings:
             max_file_bytes=_integer("NAS_MAX_FILE_BYTES", 2097152, 1, 20 * 1024 * 1024),
             max_text_chars=_integer("NAS_MAX_TEXT_CHARS", 50000, 1, 200000),
             max_search_entries=_integer("NAS_MAX_SEARCH_ENTRIES", 10000, 1, 100000),
+            status_snapshot_path=os.environ.get("NAS_STATUS_SNAPSHOT_PATH", ""),
+            status_max_age_seconds=_integer("NAS_STATUS_MAX_AGE_SECONDS", 600, 60, 3600),
             dsm_url=os.environ.get("DSM_URL", "").rstrip("/"),
             dsm_username=os.environ.get("DSM_USERNAME", ""),
             dsm_password=_secret("DSM_PASSWORD"),
@@ -199,6 +203,14 @@ class Settings:
             raise ValueError("MCP_AUTH_TOKEN must contain at least 32 printable ASCII characters")
         if not self.allowed_hosts or any("/" in host for host in self.allowed_hosts):
             raise ValueError("MCP_ALLOWED_HOSTS must contain hostnames with optional ports")
+        if self.status_snapshot_path and (
+            not Path(self.status_snapshot_path).is_absolute()
+            or ".." in Path(self.status_snapshot_path).parts
+            or any(ord(char) < 32 or ord(char) == 127 for char in self.status_snapshot_path)
+        ):
+            raise ValueError("NAS_STATUS_SNAPSHOT_PATH must be an absolute path")
+        if not 60 <= self.status_max_age_seconds <= 3600:
+            raise ValueError("NAS_STATUS_MAX_AGE_SECONDS must be between 60 and 3600")
         dsm_values = (self.dsm_url, self.dsm_username, self.dsm_password)
         if any(dsm_values) and not all(dsm_values):
             raise ValueError("DSM_URL, DSM_USERNAME and DSM_PASSWORD must be set together")
