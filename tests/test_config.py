@@ -111,3 +111,14 @@ def test_invalid_boolean_fails_closed(monkeypatch):
 def test_invalid_download_destination_fails_at_startup(path):
     with pytest.raises(ValueError, match="shared-folder-relative"):
         Settings(transport="stdio", download_destination=path).validate()
+
+
+def test_status_snapshot_opt_in_requires_safe_path_and_age(monkeypatch):
+    monkeypatch.setenv("MCP_TRANSPORT", "stdio")
+    monkeypatch.setenv("NAS_STATUS_SNAPSHOT_PATH", "/run/nas-status/status.json")
+    assert Settings.from_env().status_max_age_seconds == 600
+    for path in ("relative/status.json", "/run/../data/status.json", "/run/status\n.json"):
+        with pytest.raises(ValueError, match="NAS_STATUS_SNAPSHOT_PATH"):
+            replace(Settings(transport="stdio"), status_snapshot_path=path).validate()
+    with pytest.raises(ValueError, match="NAS_STATUS_MAX_AGE_SECONDS"):
+        replace(Settings(transport="stdio"), status_max_age_seconds=3601).validate()

@@ -1,0 +1,12 @@
+services:
+  nas-mcp:
+    volumes:
+      - type: bind
+        source: ${NAS_STATUS_DIR:?Set NAS_STATUS_DIR to the protected status output directory}
+        target: /run/nas-status
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      NAS_STATUS_SNAPSHOT_PATH: /run/nas-status/status.json
+      NAS_STATUS_MAX_AGE_SECONDS: ${NAS_STATUS_MAX_AGE_SECONDS:-600}

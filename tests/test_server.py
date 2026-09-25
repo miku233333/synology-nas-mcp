@@ -21,6 +21,9 @@ async def test_tool_visibility_and_annotations(settings):
     tools = await create_server(dsm).list_tools()
     assert "list_containers" in {tool.name for tool in tools}
     assert "control_container" not in {tool.name for tool in tools}
+    status = replace(settings, status_snapshot_path="/run/nas-status/status.json")
+    tools = {tool.name: tool for tool in await create_server(status).list_tools()}
+    assert tools["get_nas_status"].annotations.read_only_hint is True
     enabled = replace(dsm, enable_container_actions=True, allowed_containers=("demo",))
     tools = {tool.name: tool for tool in await create_server(enabled).list_tools()}
     assert tools["control_container"].annotations.read_only_hint is False

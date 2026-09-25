@@ -2,6 +2,7 @@
 
 import hmac
 import sys
+from pathlib import Path
 from typing import Literal
 
 import uvicorn
@@ -19,6 +20,7 @@ from synology_nas_mcp.config import Settings
 from synology_nas_mcp.dsm import DSMClient, DSMError, NASManager
 from synology_nas_mcp.files import FileStore
 from synology_nas_mcp.oauth import OAuthTokenVerifier
+from synology_nas_mcp.status_snapshot import read_status_snapshot
 
 READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)
@@ -139,6 +141,15 @@ def create_server(settings: Settings) -> MCPServer:
     def read_file(path: str) -> dict:
         """Read bounded text from a shared text, PDF or DOCX file. No OCR."""
         return file_call("read_file", path)
+
+    if settings.status_snapshot_path:
+
+        @server.tool(annotations=READ)
+        def get_nas_status() -> dict:
+            """Read a recent allowlisted pool, volume, disk and SSD cache snapshot."""
+            return read_status_snapshot(
+                Path(settings.status_snapshot_path), settings.status_max_age_seconds
+            )
 
     async def nas_call(method: str, *args) -> dict:
         client = DSMClient(
