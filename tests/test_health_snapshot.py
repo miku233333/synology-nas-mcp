@@ -21,20 +21,20 @@ def health_document(captured_at=None):
         },
         "ups": {
             "data_status": "ok",
-            "status_flags": ["ALARM", "OL", "RB", "OFF"],
-            "battery_charge_percent": 100,
-            "battery_runtime_seconds": 645,
+            "status_flags": ["ALARM", "OL", "CHRG"],
+            "battery_charge_percent": 73,
+            "battery_runtime_seconds": 1800,
         },
         "network": {
             "data_status": "ok",
             "interfaces": [
                 {
-                    "name": "bond0",
+                    "name": "bond9",
                     "kind": "bond",
                     "link_state": "up",
-                    "speed_mbps": 5000,
+                    "speed_mbps": 2000,
                     "bond_mode": "802_3ad",
-                    "slaves": ["eth0", "eth1"],
+                    "slaves": ["eth4", "eth5"],
                 }
             ],
         },
@@ -52,15 +52,15 @@ def test_ups_preserves_alarm_flags_without_declaring_ol_healthy(monkeypatch):
         health_snapshot,
         "_run",
         lambda argv: (
-            b"ups.status: ALARM OL RB OFF UNKNOWN\nbattery.charge: 100\nbattery.runtime: 645\n"
+            b"ups.status: ALARM OL CHRG UNKNOWN\nbattery.charge: 73\nbattery.runtime: 1800\n"
         ),
     )
 
     assert health_snapshot._ups() == {
         "data_status": "ok",
-        "status_flags": ["ALARM", "OL", "RB", "OFF"],
-        "battery_charge_percent": 100,
-        "battery_runtime_seconds": 645,
+        "status_flags": ["ALARM", "OL", "CHRG"],
+        "battery_charge_percent": 73,
+        "battery_runtime_seconds": 1800,
     }
 
 
@@ -74,8 +74,8 @@ def test_ups_without_an_allowlisted_status_is_unavailable(monkeypatch):
 def test_network_only_returns_allowlisted_interfaces_and_bond_fields(tmp_path, monkeypatch):
     sys_class_net = tmp_path / "net"
     for name, state, speed in (
-        ("eth0", "up", "2500"),
-        ("bond0", "up", "5000"),
+        ("eth4", "up", "1000"),
+        ("bond9", "up", "2000"),
         ("lo", "unknown", "0"),
     ):
         directory = sys_class_net / name
@@ -84,10 +84,10 @@ def test_network_only_returns_allowlisted_interfaces_and_bond_fields(tmp_path, m
         (directory / "speed").write_text(speed, encoding="ascii")
     bonding = tmp_path / "bonding"
     bonding.mkdir()
-    (bonding / "bond0").write_text(
+    (bonding / "bond9").write_text(
         "Bonding Mode: IEEE 802.3ad Dynamic link aggregation\n"
-        "Slave Interface: eth0\n"
-        "Slave Interface: eth1\n",
+        "Slave Interface: eth4\n"
+        "Slave Interface: eth5\n",
         encoding="ascii",
     )
     monkeypatch.setattr(health_snapshot, "_SYS_CLASS_NET", sys_class_net)
@@ -97,27 +97,27 @@ def test_network_only_returns_allowlisted_interfaces_and_bond_fields(tmp_path, m
         "data_status": "ok",
         "interfaces": [
             {
-                "name": "bond0",
+                "name": "bond9",
                 "kind": "bond",
                 "link_state": "up",
-                "speed_mbps": 5000,
+                "speed_mbps": 2000,
                 "bond_mode": "802_3ad",
-                "slaves": ["eth0", "eth1"],
+                "slaves": ["eth4", "eth5"],
             },
-            {"name": "eth0", "kind": "physical", "link_state": "up", "speed_mbps": 2500},
+            {"name": "eth4", "kind": "physical", "link_state": "up", "speed_mbps": 1000},
         ],
     }
 
 
 def test_network_does_not_assign_an_unconfirmed_bond_mode(tmp_path, monkeypatch):
     sys_class_net = tmp_path / "net"
-    directory = sys_class_net / "bond0"
+    directory = sys_class_net / "bond9"
     directory.mkdir(parents=True)
     (directory / "operstate").write_text("up", encoding="ascii")
-    (directory / "speed").write_text("5000", encoding="ascii")
+    (directory / "speed").write_text("2000", encoding="ascii")
     bonding = tmp_path / "bonding"
     bonding.mkdir()
-    (bonding / "bond0").write_text(
+    (bonding / "bond9").write_text(
         "Bonding Mode: load balancing (round-robin) (balance-rr)\n",
         encoding="ascii",
     )
@@ -125,7 +125,7 @@ def test_network_does_not_assign_an_unconfirmed_bond_mode(tmp_path, monkeypatch)
     monkeypatch.setattr(health_snapshot, "_PROC_BONDING", bonding)
 
     assert health_snapshot._network()["interfaces"] == [
-        {"name": "bond0", "kind": "bond", "link_state": "up", "speed_mbps": 5000}
+        {"name": "bond9", "kind": "bond", "link_state": "up", "speed_mbps": 2000}
     ]
 
 

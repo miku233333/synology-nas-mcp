@@ -10,5 +10,9 @@ dist
 build
 secrets
 data
+output
+outputs
+status.json
+health.json
 *.pem
 *.key
