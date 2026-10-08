@@ -14,6 +14,47 @@ from xml.etree import ElementTree
 
 _MAX_SEARCH_ENTRIES = 10_000
 _MAX_LIMIT = 1_000
+_MAX_CONTENT_SEARCH_FILES = 64
+_MAX_CONTENT_SEARCH_BYTES = 16 * 1024 * 1024
+_MAX_CONTENT_SEARCH_QUERY_CHARS = 200
+_MAX_CONTENT_SNIPPET_CHARS = 240
+_CONTENT_SEARCH_BINARY_SUFFIXES = frozenset(
+    {
+        ".7z",
+        ".aac",
+        ".arw",
+        ".avi",
+        ".bmp",
+        ".bz2",
+        ".cr2",
+        ".dmg",
+        ".dng",
+        ".flac",
+        ".gif",
+        ".gz",
+        ".heic",
+        ".heif",
+        ".iso",
+        ".jpeg",
+        ".jpg",
+        ".m4a",
+        ".mkv",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".nef",
+        ".png",
+        ".rar",
+        ".tar",
+        ".tif",
+        ".tiff",
+        ".wav",
+        ".webp",
+        ".wmv",
+        ".xz",
+        ".zip",
+    }
+)
 _MAX_RELATIVE_DEPTH = 64
 _MAX_DOCX_ENTRIES = 1_024
 _MAX_DOCX_TOTAL_BYTES = 8 * 1024 * 1024
@@ -155,6 +196,124 @@ class FileStore:
             "returned": len(results),
             "scanned_entries": scanned,
             "truncated": more_matches or scan_truncated,
+        }
+
+    def search_content(self, query: str, path: str = ".", limit: int = 20) -> dict:
+        """Find a phrase in bounded UTF-8, PDF and DOCX text without storing an index."""
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("Search query must not be empty")
+        if "\x00" in query or len(query) > _MAX_CONTENT_SEARCH_QUERY_CHARS:
+            raise ValueError("Search query is invalid or too long")
+        self._validate_limit(limit)
+        base_parts = self._path_parts(path)
+        start_fd = self._open_directory(base_parts)
+        os.close(start_fd)
+
+        needle = query.casefold()
+        pending = [base_parts]
+        results: list[dict] = []
+        scanned_entries = 0
+        scanned_files = 0
+        scanned_bytes = 0
+        skipped_files = 0
+        truncated = False
+        stop_scan = False
+
+        while pending and not stop_scan:
+            directory_parts = pending.pop()
+            directory_fd = self._open_directory(directory_parts)
+            child_directories: list[tuple[str, ...]] = []
+            try:
+                with os.scandir(directory_fd) as iterator:
+                    for entry in iterator:
+                        if scanned_entries >= self.max_search_entries:
+                            truncated = True
+                            stop_scan = True
+                            break
+                        scanned_entries += 1
+                        try:
+                            metadata = entry.stat(follow_symlinks=False)
+                        except FileNotFoundError:
+                            continue
+                        child_parts = directory_parts + (entry.name,)
+                        if len(child_parts) > _MAX_RELATIVE_DEPTH:
+                            truncated = True
+                            continue
+                        if stat.S_ISDIR(metadata.st_mode):
+                            child_directories.append(child_parts)
+                            continue
+                        if not stat.S_ISREG(metadata.st_mode):
+                            continue
+                        if Path(entry.name).suffix.casefold() in _CONTENT_SEARCH_BINARY_SUFFIXES:
+                            skipped_files += 1
+                            continue
+                        if metadata.st_size > self.max_file_bytes:
+                            skipped_files += 1
+                            truncated = True
+                            continue
+                        if scanned_files >= _MAX_CONTENT_SEARCH_FILES:
+                            skipped_files += 1
+                            truncated = True
+                            stop_scan = True
+                            break
+                        if scanned_bytes + metadata.st_size > _MAX_CONTENT_SEARCH_BYTES:
+                            skipped_files += 1
+                            truncated = True
+                            continue
+                        scanned_files += 1
+                        scanned_bytes += metadata.st_size
+                        try:
+                            document = self.read_file(self._display_path(child_parts))
+                        except (OSError, ValueError):
+                            skipped_files += 1
+                            truncated = True
+                            continue
+                        scanned_bytes += document["size"] - metadata.st_size
+                        if scanned_bytes > _MAX_CONTENT_SEARCH_BYTES:
+                            skipped_files += 1
+                            truncated = True
+                            stop_scan = True
+                            break
+                        if document["truncated"]:
+                            truncated = True
+                        content = document["content"]
+                        match_at = content.casefold().find(needle)
+                        if match_at < 0:
+                            continue
+                        folded_offset = 0
+                        for original_offset, character in enumerate(content):
+                            folded_offset += len(character.casefold())
+                            if folded_offset > match_at:
+                                break
+                        snippet_start = max(0, original_offset - 80)
+                        snippet_end = min(len(content), snippet_start + _MAX_CONTENT_SNIPPET_CHARS)
+                        results.append(
+                            {
+                                "name": entry.name,
+                                "path": document["path"],
+                                "snippet": content[snippet_start:snippet_end],
+                            }
+                        )
+                        if len(results) >= limit:
+                            truncated = True
+                            stop_scan = True
+                            break
+            finally:
+                os.close(directory_fd)
+            child_directories.sort(key=lambda item: (item[-1].casefold(), item[-1]), reverse=True)
+            pending.extend(child_directories)
+
+        results.sort(key=lambda item: (item["path"].casefold(), item["path"]))
+        return {
+            "query": query,
+            "path": self._display_path(base_parts),
+            "results": results,
+            "returned": len(results),
+            "scanned_entries": scanned_entries,
+            "scanned_files": scanned_files,
+            "scanned_bytes": scanned_bytes,
+            "skipped_files": skipped_files,
+            "truncated": truncated,
         }
 
     def read_file(self, path: str) -> dict:
