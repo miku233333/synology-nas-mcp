@@ -1,6 +1,6 @@
 # Synology NAS MCP
 
-[![CI](https://github.com/miku233333/synology-nas-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/miku233333/synology-nas-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/miku2339/synology-nas-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/miku2339/synology-nas-mcp/actions/workflows/ci.yml)
 
 Self-hosted MCP access to Synology NAS files, monitoring, containers and downloads.
 
@@ -40,7 +40,7 @@ PDF 支援文字層；DOCX 擷取主文件段落。全文搜尋可使用 NAS 本
 1. 下載或 clone 本倉庫，放到 NAS 的專案資料夾：
 
    ```sh
-   git clone https://github.com/miku233333/synology-nas-mcp.git
+   git clone https://github.com/miku2339/synology-nas-mcp.git
    cd synology-nas-mcp
    cp .env.example .env
    chmod 600 .env
