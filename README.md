@@ -6,7 +6,7 @@ Self-hosted MCP access to Synology NAS files, monitoring, containers and downloa
 
 Synology NAS 的自架 MCP 服務。在 Container Manager 執行，透過 MCP 客戶端讀取文件、查詢 NAS 狀態，並按需啟用容器及下載操作。支援 Streamable HTTP、stdio，以及可選的 OpenAI Secure MCP Tunnel。
 
-**Alpha：MCP 連線、檔案讀取與容器部署已於 DS720+／DSM 7.3 實機驗證；DSM API 工具、公開 OAuth 接入與 ChatGPT 連通仍待驗證。** 本專案為社群專案，與 Synology、OpenAI 沒有隸屬關係。
+**Alpha：MCP 連線、檔案讀取、公開 OAuth、ChatGPT 連通及 NAS 狀態快照已完成實機驗證；不同機型的 DSM API 相容性仍須在部署環境確認。** 本專案為社群專案，與 Synology、OpenAI 沒有隸屬關係。
 
 ## 功能
 
@@ -44,7 +44,7 @@ PDF 支援文字層；DOCX 擷取主文件段落。沒有 OCR、全文索引或�
    chmod 600 .env
    ```
 
-2. 建立專用共享資料夾，例如 `/volume1/AI-Share`，放入可讓 MCP 客戶端讀取的文件。在 `.env` 設定：
+2. 建立專用共享資料夾，例如 `/volume1/your-share`，放入可讓 MCP 客戶端讀取的文件。在 `.env` 設定：
 
    - `NAS_SHARE_PATH`：現有資料夾的絕對路徑。
    - `NAS_UID`、`NAS_GID`：有權讀取該資料夾的 DSM 使用者數字 UID/GID，可用 `id 使用者名稱` 查詢。不要用 root。
@@ -103,7 +103,7 @@ ChatGPT 功能取決於帳戶、Developer mode 與 workspace 權限。官方開�
    MCP_CF_ACCESS_ISSUER_URL=https://team.cloudflareaccess.com
    MCP_CF_ACCESS_AUDIENCE=access-app-aud-tag
    MCP_CF_ACCESS_ALLOWED_EMAILS=owner@example.com
-   CLOUDFLARE_TUNNEL_TOKEN_FILE=/volume1/docker/synology-nas-mcp-secrets/cloudflare-token
+   CLOUDFLARE_TUNNEL_TOKEN_FILE=/volume1/mcp-secrets-example/cloudflare-token
    ```
 
 3. 執行 `docker compose -f compose.yaml -f compose.cloudflare.yaml --profile cloudflare up -d --build`。先檢查未登入請求由 Access 回覆 OAuth challenge；登入後確認只可讀取預期的測試文件。NAS 會再次驗證 Access 傳到 origin 的身分 JWT；不要把容器主機埠另外公開。
@@ -174,20 +174,20 @@ DSM_PASSWORD='your-local-password'
 
 `get_nas_status` 可獨立於 DSM 帳戶啟用。NAS 的 root 定時執行 `producer.py`，透過本機 `synowebapi` 讀取儲存狀態，只把固定白名單欄位寫入 JSON；MCP 容器只讀掛載輸出目錄，預設拒絕超過 10 分鐘的資料。狀態和建議代碼保留 DSM 原值；容量、溫度與命中率欄位標為 `*_value`，不猜測單位。儲存池的 `size.used` 不代表文件已用空間，故不回傳。`ssd_cache_data_status` 會區分已回報、空白或不可用；空白和缺少欄位不代表沒有快取或快取健康。
 
-同一個輸出目錄的 `health.json` 供 `get_power_status`、`get_ups_status`、`get_network_status` 及 `get_service_status` 使用。四個工具只回傳 snapshot 的 `captured_at` 和各自 section；`unknown`、`unavailable` 和缺少數值都保留原意。UPS 的 `status_flags` 只會保留已知 NUT 旗標（例如 `OL`、`RB`、`ALARM`、`OFF`），未知旗標會略過；不把 `OL` 推斷為健康。UPS 狀態不等於 NAS 電源供應健康，UPS 回報的負載也不可推斷為 NAS 瓦數。
+同一個輸出目錄的 `health.json` 供 `get_power_status`、`get_ups_status`、`get_network_status` 及 `get_service_status` 使用。四個工具只回傳 snapshot 的 `captured_at` 和各自 section；`unknown`、`unavailable` 和缺少數值都保留原意。UPS 的 `status_flags` 只會保留已知 NUT 旗標，未知旗標會略過；不把 `OL` 推斷為健康。UPS 狀態不等於 NAS 電源供應健康，UPS 回報的負載也不可推斷為 NAS 瓦數。
 
 在 NAS SSH 中，從倉庫目錄以 root 建立獨立程式目錄，勿放在可由其他帳戶寫入的 Docker 專案目錄。以下 `100` 只是範例，應換成 `.env` 的 `NAS_GID`：
 
 ```sh
-sudo mkdir -p /volume1/synology-nas-mcp-status
-sudo chmod 700 /volume1/synology-nas-mcp-status
-sudo cp producer.py src/synology_nas_mcp/status_snapshot.py src/synology_nas_mcp/health_snapshot.py /volume1/synology-nas-mcp-status/
-sudo chown root:root /volume1/synology-nas-mcp-status /volume1/synology-nas-mcp-status/*.py
-sudo chmod 600 /volume1/synology-nas-mcp-status/*.py
-sudo /usr/bin/python3 -I -B /volume1/synology-nas-mcp-status/producer.py --gid 100
+sudo mkdir -p /volume1/mcp-status-example
+sudo chmod 700 /volume1/mcp-status-example
+sudo cp producer.py src/synology_nas_mcp/status_snapshot.py src/synology_nas_mcp/health_snapshot.py /volume1/mcp-status-example/
+sudo chown root:root /volume1/mcp-status-example /volume1/mcp-status-example/*.py
+sudo chmod 600 /volume1/mcp-status-example/*.py
+sudo /usr/bin/python3 -I -B /volume1/mcp-status-example/producer.py --gid 100
 ```
 
-在 DSM **控制台 → 工作排程器** 建立「使用者定義的指令碼」，使用者選 `root`，每 5 分鐘執行同一行 `/usr/bin/python3 -I -B ... --gid 100`。先手動執行一次並確認 `output` 是 `root:NAS_GID`、`750`，`status.json` 和 `health.json` 都是 `root:NAS_GID`、`640`。把 `.env` 的 `NAS_STATUS_DIR` 設為 `/volume1/synology-nas-mcp-status/output`，再執行 `docker compose -f compose.yaml -f compose.status.yaml up -d --build`；若已使用其他 Compose override，也一併帶上。snapshot 掛載於容器 `/run/nas-status`，與文件工具的 `/data` 分開。部署後呼叫四個 health 工具驗收；回覆的 `unavailable` 是來源狀態，並非讀取錯誤。
+在 DSM **控制台 → 工作排程器** 建立「使用者定義的指令碼」，使用者選 `root`，每 5 分鐘執行同一行 `/usr/bin/python3 -I -B ... --gid 100`。先手動執行一次並確認 `output` 是 `root:NAS_GID`、`750`，`status.json` 和 `health.json` 都是 `root:NAS_GID`、`640`。把 `.env` 的 `NAS_STATUS_DIR` 設為 `/volume1/mcp-status-example/output`，再執行 `docker compose -f compose.yaml -f compose.status.yaml up -d --build`；若已使用其他 Compose override，也一併帶上。snapshot 掛載於容器 `/run/nas-status`，與文件工具的 `/data` 分開。部署後呼叫四個 health 工具驗收；回覆的 `unavailable` 是來源狀態，並非讀取錯誤。
 
 ### 啟用指定容器操作
 
