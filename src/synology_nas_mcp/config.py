@@ -61,6 +61,8 @@ class Settings:
     cf_access_issuer_url: str = ""
     cf_access_audience: str = ""
     cf_access_allowed_emails: tuple[str, ...] = ()
+    source_origin: str = ""
+    index_path: str = ""
     allowed_hosts: tuple[str, ...] = (
         "localhost:*",
         "127.0.0.1:*",
@@ -107,6 +109,8 @@ class Settings:
                 for item in os.environ.get("MCP_CF_ACCESS_ALLOWED_EMAILS", "").split(",")
                 if item.strip()
             ),
+            source_origin=os.environ.get("MCP_SOURCE_ORIGIN", ""),
+            index_path=os.environ.get("NAS_INDEX_PATH", ""),
             allowed_hosts=tuple(
                 item.strip()
                 for item in os.environ.get(
@@ -191,6 +195,27 @@ class Settings:
                 for email in self.cf_access_allowed_emails
             ):
                 raise ValueError("MCP_CF_ACCESS_ALLOWED_EMAILS must contain email addresses")
+        if self.source_origin:
+            if self.auth_mode != "cloudflare-access":
+                raise ValueError("MCP_SOURCE_ORIGIN requires cloudflare-access mode")
+            _https_url("MCP_SOURCE_ORIGIN", self.source_origin, path="")
+            origin = urlsplit(self.source_origin)
+            if origin.port not in (None, 443):
+                raise ValueError("MCP_SOURCE_ORIGIN must use the default HTTPS port")
+            host = origin.hostname.lower()
+            allowed = {entry.lower() for entry in self.allowed_hosts}
+            if not ({host, f"{host}:*", origin.netloc.lower()} & allowed):
+                raise ValueError("MCP_SOURCE_ORIGIN host must be in MCP_ALLOWED_HOSTS")
+        if self.index_path:
+            index_path = Path(self.index_path)
+            if (
+                not index_path.is_absolute()
+                or ".." in index_path.parts
+                or any(ord(char) < 32 or ord(char) == 127 for char in self.index_path)
+                or index_path == self.data_root
+                or self.data_root in index_path.parents
+            ):
+                raise ValueError("NAS_INDEX_PATH must be an absolute path outside NAS_DATA_ROOT")
         if (
             self.transport == "streamable-http"
             and self.auth_mode == "private-bearer"

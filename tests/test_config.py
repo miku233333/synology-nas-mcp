@@ -53,6 +53,31 @@ def test_cloudflare_access_requires_team_and_owner():
         replace(settings, cf_access_allowed_emails=("not-an-email",)).validate()
 
 
+def test_source_origin_requires_cloudflare_access_and_matching_https_host():
+    settings = Settings(
+        auth_mode="cloudflare-access",
+        cf_access_issuer_url="https://team.cloudflareaccess.com",
+        cf_access_audience="a" * 64,
+        cf_access_allowed_emails=("owner@example.com",),
+        source_origin="https://mcp.example.test",
+        allowed_hosts=("mcp.example.test:*",),
+    )
+    settings.validate()
+    with pytest.raises(ValueError, match="cloudflare-access mode"):
+        replace(settings, auth_mode="private-bearer", auth_token="a" * 32).validate()
+    for origin in (
+        "http://mcp.example.test",
+        "https://mcp.example.test/other",
+        "https://user:secret@mcp.example.test",
+        "https://mcp.example.test/?token=secret",
+        "https://mcp.example.test:444",
+    ):
+        with pytest.raises(ValueError, match="MCP_SOURCE_ORIGIN"):
+            replace(settings, source_origin=origin).validate()
+    with pytest.raises(ValueError, match="MCP_ALLOWED_HOSTS"):
+        replace(settings, allowed_hosts=("nas-mcp:*",)).validate()
+
+
 def test_management_actions_require_scopes():
     settings = Settings(
         transport="stdio",
@@ -122,3 +147,12 @@ def test_status_snapshot_opt_in_requires_safe_path_and_age(monkeypatch):
             replace(Settings(transport="stdio"), status_snapshot_path=path).validate()
     with pytest.raises(ValueError, match="NAS_STATUS_MAX_AGE_SECONDS"):
         replace(Settings(transport="stdio"), status_max_age_seconds=3601).validate()
+
+
+def test_index_path_stays_outside_shared_folder(monkeypatch):
+    monkeypatch.setenv("MCP_TRANSPORT", "stdio")
+    monkeypatch.setenv("NAS_INDEX_PATH", "/run/nas-index/index.sqlite3")
+    assert Settings.from_env().index_path == "/run/nas-index/index.sqlite3"
+    for path in ("index.sqlite3", "/data/index.sqlite3", "/run/../data/index.sqlite3"):
+        with pytest.raises(ValueError, match="NAS_INDEX_PATH"):
+            replace(Settings(transport="stdio"), index_path=path).validate()

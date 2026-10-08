@@ -16,3 +16,4 @@ status.json
 health.json
 *.pem
 *.key
+*.tgz
