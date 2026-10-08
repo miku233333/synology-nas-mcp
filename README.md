@@ -19,6 +19,10 @@ Synology NAS 的自架 MCP 服務。在 Container Manager 執行，透過 MCP �
 | `get_resource_usage` | CPU、記憶體、網路、磁碟 I/O | DSM 帳戶 |
 | `get_storage_info` | 磁碟及儲存空間狀態 | DSM 帳戶 |
 | `get_nas_status` | 儲存池、卷、磁碟 SMART 與 SSD 快取摘要 | NAS 端定時產生的唯讀 snapshot |
+| `get_power_status` | NAS 運行及電源供應狀態；不推測瓦數 | NAS 端 health snapshot |
+| `get_ups_status` | UPS 狀態旗標、電量及續航（僅裝置有回報時） | NAS 端 health snapshot |
+| `get_network_status` | 網路介面、鏈路速度及聚合狀態 | NAS 端 health snapshot |
+| `get_service_status` | 指定 NAS 服務／套件狀態摘要 | NAS 端 health snapshot |
 | `list_containers` | 容器狀態摘要 | DSM 帳戶及 Container Manager |
 | `list_download_tasks` | 下載任務摘要 | DSM 帳戶及 Download Station |
 | `control_container` | 啟動、停止、重啟指定容器 | 操作開關及精確名稱清單 |
@@ -170,18 +174,20 @@ DSM_PASSWORD='your-local-password'
 
 `get_nas_status` 可獨立於 DSM 帳戶啟用。NAS 的 root 定時執行 `producer.py`，透過本機 `synowebapi` 讀取儲存狀態，只把固定白名單欄位寫入 JSON；MCP 容器只讀掛載輸出目錄，預設拒絕超過 10 分鐘的資料。狀態和建議代碼保留 DSM 原值；容量、溫度與命中率欄位標為 `*_value`，不猜測單位。儲存池的 `size.used` 不代表文件已用空間，故不回傳。`ssd_cache_data_status` 會區分已回報、空白或不可用；空白和缺少欄位不代表沒有快取或快取健康。
 
+同一個輸出目錄的 `health.json` 供 `get_power_status`、`get_ups_status`、`get_network_status` 及 `get_service_status` 使用。四個工具只回傳 snapshot 的 `captured_at` 和各自 section；`unknown`、`unavailable` 和缺少數值都保留原意。UPS 的 `status_flags` 只會保留已知 NUT 旗標（例如 `OL`、`RB`、`ALARM`、`OFF`），未知旗標會略過；不把 `OL` 推斷為健康。UPS 狀態不等於 NAS 電源供應健康，UPS 回報的負載也不可推斷為 NAS 瓦數。
+
 在 NAS SSH 中，從倉庫目錄以 root 建立獨立程式目錄，勿放在可由其他帳戶寫入的 Docker 專案目錄。以下 `100` 只是範例，應換成 `.env` 的 `NAS_GID`：
 
 ```sh
 sudo mkdir -p /volume1/synology-nas-mcp-status
 sudo chmod 700 /volume1/synology-nas-mcp-status
-sudo cp producer.py src/synology_nas_mcp/status_snapshot.py /volume1/synology-nas-mcp-status/
+sudo cp producer.py src/synology_nas_mcp/status_snapshot.py src/synology_nas_mcp/health_snapshot.py /volume1/synology-nas-mcp-status/
 sudo chown root:root /volume1/synology-nas-mcp-status /volume1/synology-nas-mcp-status/*.py
 sudo chmod 600 /volume1/synology-nas-mcp-status/*.py
 sudo /usr/bin/python3 -I -B /volume1/synology-nas-mcp-status/producer.py --gid 100
 ```
 
-在 DSM **控制台 → 工作排程器** 建立「使用者定義的指令碼」，使用者選 `root`，每 5 分鐘執行同一行 `/usr/bin/python3 -I -B ... --gid 100`。先手動執行一次並確認 `output` 是 `root:NAS_GID`、`750`，`status.json` 是 `root:NAS_GID`、`640`。把 `.env` 的 `NAS_STATUS_DIR` 設為 `/volume1/synology-nas-mcp-status/output`，再執行 `docker compose -f compose.yaml -f compose.status.yaml up -d --build`；若已使用其他 Compose override，也一併帶上。snapshot 掛載於容器 `/run/nas-status`，與文件工具的 `/data` 分開。
+在 DSM **控制台 → 工作排程器** 建立「使用者定義的指令碼」，使用者選 `root`，每 5 分鐘執行同一行 `/usr/bin/python3 -I -B ... --gid 100`。先手動執行一次並確認 `output` 是 `root:NAS_GID`、`750`，`status.json` 和 `health.json` 都是 `root:NAS_GID`、`640`。把 `.env` 的 `NAS_STATUS_DIR` 設為 `/volume1/synology-nas-mcp-status/output`，再執行 `docker compose -f compose.yaml -f compose.status.yaml up -d --build`；若已使用其他 Compose override，也一併帶上。snapshot 掛載於容器 `/run/nas-status`，與文件工具的 `/data` 分開。部署後呼叫四個 health 工具驗收；回覆的 `unavailable` 是來源狀態，並非讀取錯誤。
 
 ### 啟用指定容器操作
 
