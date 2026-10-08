@@ -19,6 +19,7 @@ from synology_nas_mcp.cloudflare_access import CloudflareAccessVerifier
 from synology_nas_mcp.config import Settings
 from synology_nas_mcp.dsm import DSMClient, DSMError, NASManager
 from synology_nas_mcp.files import FileStore
+from synology_nas_mcp.health_snapshot import read_health_snapshot
 from synology_nas_mcp.oauth import OAuthTokenVerifier
 from synology_nas_mcp.status_snapshot import read_status_snapshot
 
@@ -143,6 +144,11 @@ def create_server(settings: Settings) -> MCPServer:
         return file_call("read_file", path)
 
     if settings.status_snapshot_path:
+        health_snapshot_path = Path(settings.status_snapshot_path).with_name("health.json")
+
+        def health_call(section: Literal["power", "ups", "network", "services"]) -> dict:
+            snapshot = read_health_snapshot(health_snapshot_path, settings.status_max_age_seconds)
+            return {"captured_at": snapshot["captured_at"], section: snapshot[section]}
 
         @server.tool(annotations=READ)
         def get_nas_status() -> dict:
@@ -150,6 +156,26 @@ def create_server(settings: Settings) -> MCPServer:
             return read_status_snapshot(
                 Path(settings.status_snapshot_path), settings.status_max_age_seconds
             )
+
+        @server.tool(annotations=READ)
+        def get_power_status() -> dict:
+            """Read the reported NAS power state without estimating power consumption."""
+            return health_call("power")
+
+        @server.tool(annotations=READ)
+        def get_ups_status() -> dict:
+            """Read the reported UPS state while preserving unavailable values."""
+            return health_call("ups")
+
+        @server.tool(annotations=READ)
+        def get_network_status() -> dict:
+            """Read the allowlisted interface, link speed and aggregation snapshot."""
+            return health_call("network")
+
+        @server.tool(annotations=READ)
+        def get_service_status() -> dict:
+            """Read the allowlisted NAS service and package status without configuration."""
+            return health_call("services")
 
     async def nas_call(method: str, *args) -> dict:
         client = DSMClient(

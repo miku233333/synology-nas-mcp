@@ -1,8 +1,11 @@
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
 
+from synology_nas_mcp import server as server_module
 from synology_nas_mcp.config import Settings
 from synology_nas_mcp.server import create_app, create_server
 
@@ -24,10 +27,52 @@ async def test_tool_visibility_and_annotations(settings):
     status = replace(settings, status_snapshot_path="/run/nas-status/status.json")
     tools = {tool.name: tool for tool in await create_server(status).list_tools()}
     assert tools["get_nas_status"].annotations.read_only_hint is True
+    for name in (
+        "get_power_status",
+        "get_ups_status",
+        "get_network_status",
+        "get_service_status",
+    ):
+        assert tools[name].annotations.read_only_hint is True
+        assert tools[name].annotations.destructive_hint is False
     enabled = replace(dsm, enable_container_actions=True, allowed_containers=("demo",))
     tools = {tool.name: tool for tool in await create_server(enabled).list_tools()}
     assert tools["control_container"].annotations.read_only_hint is False
     assert tools["control_container"].annotations.destructive_hint is True
+
+
+async def test_health_snapshot_tools_return_only_requested_section(settings, monkeypatch):
+    captured_at = "2026-10-08T02:00:00+00:00"
+    snapshot = {
+        "captured_at": captured_at,
+        "power": {"data_status": "reported", "running": True, "psu_health": "unknown"},
+        "ups": {"data_status": "unavailable", "status": "unknown"},
+        "network": {"data_status": "reported", "interfaces": []},
+        "services": {"data_status": "reported", "units": []},
+    }
+    calls = []
+
+    def fake_read(path, max_age_seconds):
+        calls.append((path, max_age_seconds))
+        return snapshot
+
+    monkeypatch.setattr(server_module, "read_health_snapshot", fake_read)
+    status = replace(settings, status_snapshot_path="/run/nas-status/status.json")
+    server = create_server(status)
+    for name, section in (
+        ("get_power_status", "power"),
+        ("get_ups_status", "ups"),
+        ("get_network_status", "network"),
+        ("get_service_status", "services"),
+    ):
+        result = await server.call_tool(name, {})
+        assert result.is_error is False
+        assert len(result.content) == 1
+        assert json.loads(result.content[0].text) == {
+            "captured_at": captured_at,
+            section: snapshot[section],
+        }
+    assert calls == [(Path("/run/nas-status/health.json"), 600)] * 4
 
 
 def test_http_auth_host_origin_and_real_mcp_roundtrip(settings):

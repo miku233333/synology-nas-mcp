@@ -9,6 +9,7 @@
 - Container operations can interrupt services. Download creation uses a fixed destination and a restricted magnet syntax. Neither is enabled by default.
 - There is no generic DSM API tool, shell execution, Docker socket mount, file modification or deletion tool.
 - DSM credentials, sessions and container environment variables must not appear in MCP output. Runtime logs should not be configured to trace HTTP request bodies.
+- Health snapshots are fixed-schema, bounded, read-only inputs. Preserve `unknown` and `unavailable` states; never derive NAS power consumption from UPS status or load.
 - PDF and DOCX are untrusted formats. Size and extraction limits supplement, rather than replace, container memory/CPU limits. Keep dependencies updated.
 
 ## Reporting

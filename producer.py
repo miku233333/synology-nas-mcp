@@ -28,12 +28,12 @@ class ProducerError(Exception):
 def _trusted_code(script: Path) -> None:
     parent = script.parent.parent
     directory = script.parent
-    module = directory / "status_snapshot.py"
+    modules = (directory / "status_snapshot.py", directory / "health_snapshot.py")
     try:
         parent_info = parent.lstat()
         directory_info = directory.lstat()
         script_info = script.lstat()
-        module_info = module.lstat()
+        module_infos = tuple(module.lstat() for module in modules)
     except OSError:
         raise ProducerError("Code files are unavailable") from None
     if (
@@ -47,7 +47,7 @@ def _trusted_code(script: Path) -> None:
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != 0
             or stat.S_IMODE(info.st_mode) != 0o600
-            for info in (script_info, module_info)
+            for info in (script_info,) + module_infos
         )
     ):
         raise ProducerError("Code ownership or permissions are unsafe")
@@ -78,7 +78,7 @@ def _capture_dsm_data() -> dict:
     return response["data"]
 
 
-def _prepare_output(directory: Path, gid: int) -> None:
+def _prepare_output(directory: Path, gid: int, filename: str) -> None:
     try:
         if not directory.exists():
             directory.mkdir(mode=0o700)
@@ -92,7 +92,7 @@ def _prepare_output(directory: Path, gid: int) -> None:
             or stat.S_IMODE(info.st_mode) != 0o750
         ):
             raise ProducerError("Output directory ownership or permissions are unsafe")
-        target = directory / "status.json"
+        target = directory / filename
         try:
             existing = target.lstat()
         except FileNotFoundError:
@@ -108,23 +108,25 @@ def _prepare_output(directory: Path, gid: int) -> None:
         raise ProducerError("Output directory is unavailable") from None
 
 
-def _write_snapshot(directory: Path, gid: int, snapshot: dict, max_bytes: int) -> None:
+def _write_snapshot(
+    directory: Path, gid: int, snapshot: dict, max_bytes: int, filename: str
+) -> None:
     encoded = json.dumps(
         snapshot, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
     if len(encoded) > max_bytes:
         raise ProducerError("NAS status snapshot exceeds size limit")
-    _prepare_output(directory, gid)
+    _prepare_output(directory, gid, filename)
     temporary_path = None
     try:
-        descriptor, temporary_path = tempfile.mkstemp(prefix=".status-", dir=directory)
+        descriptor, temporary_path = tempfile.mkstemp(prefix="." + filename + "-", dir=directory)
         with os.fdopen(descriptor, "wb") as stream:
             os.fchown(stream.fileno(), 0, gid)
             os.fchmod(stream.fileno(), 0o640)
             stream.write(encoded)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary_path, directory / "status.json")
+        os.replace(temporary_path, directory / filename)
         temporary_path = None
         directory_descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -139,6 +141,34 @@ def _write_snapshot(directory: Path, gid: int, snapshot: dict, max_bytes: int) -
                 os.unlink(temporary_path)
             except OSError:
                 pass
+
+
+def _produce_snapshots(
+    output: Path,
+    gid: int,
+    storage_max_bytes: int,
+    snapshot_from_dsm,
+    health_max_bytes: int,
+    collect_health,
+) -> bool:
+    """Attempt each snapshot independently and report whether either one failed."""
+    failed = False
+    try:
+        snapshot = snapshot_from_dsm(_capture_dsm_data())
+        _write_snapshot(output, gid, snapshot, storage_max_bytes, "status.json")
+    except Exception:
+        failed = True
+    try:
+        _write_snapshot(
+            output,
+            gid,
+            collect_health(),
+            health_max_bytes,
+            "health.json",
+        )
+    except Exception:
+        failed = True
+    return failed
 
 
 def main() -> int:
@@ -157,12 +187,22 @@ def main() -> int:
     try:
         _trusted_code(script)
         sys.path.insert(0, str(script.parent))
+        from health_snapshot import MAX_HEALTH_SNAPSHOT_BYTES, collect_health
         from status_snapshot import MAX_SNAPSHOT_BYTES, snapshot_from_dsm
 
-        snapshot = snapshot_from_dsm(_capture_dsm_data())
-        _write_snapshot(script.parent / "output", args.gid, snapshot, MAX_SNAPSHOT_BYTES)
+        failed = _produce_snapshots(
+            script.parent / "output",
+            args.gid,
+            MAX_SNAPSHOT_BYTES,
+            snapshot_from_dsm,
+            MAX_HEALTH_SNAPSHOT_BYTES,
+            collect_health,
+        )
     except (ProducerError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
+        return 1
+    if failed:
+        print("NAS snapshot update failed", file=sys.stderr)
         return 1
     return 0
 
