@@ -178,6 +178,152 @@ def test_filename_search_is_recursive_case_insensitive_and_truncated(
     assert result["scanned_entries"] == 5
 
 
+def test_content_search_reads_nested_utf8_pdf_and_docx(tmp_path: Path) -> None:
+    nested = tmp_path / "資料"
+    nested.mkdir()
+    (nested / "note.txt").write_text("The NAS contains a blue moon.", encoding="utf-8")
+    _write_pdf(nested / "report.pdf", ["Blue Moon appears in this report."])
+    xml = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Another blue moon.</w:t></w:r></w:p></w:body></w:document>"
+    )
+    with zipfile.ZipFile(nested / "draft.docx", "w") as archive:
+        archive.writestr("word/document.xml", xml)
+    (nested / "only-name-blue-moon.txt").write_text("No matching content", encoding="utf-8")
+
+    result = FileStore(tmp_path).search_content("BLUE MOON", path="資料")
+
+    assert {item["path"] for item in result["results"]} == {
+        "資料/note.txt",
+        "資料/report.pdf",
+        "資料/draft.docx",
+    }
+    assert all("blue moon" in item["snippet"].casefold() for item in result["results"])
+    assert result["scanned_files"] == 4
+    assert result["skipped_files"] == 0
+    assert result["truncated"] is False
+
+
+def test_content_search_excludes_symlinks_and_skips_unreadable_files(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private needle", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "valid.txt").write_text("visible needle", encoding="utf-8")
+    (root / "binary.bin").write_bytes(b"\xff\xfe")
+    (root / "link.txt").symlink_to(outside)
+
+    result = FileStore(root).search_content("needle")
+
+    assert [item["path"] for item in result["results"]] == ["valid.txt"]
+    assert result["skipped_files"] == 1
+    assert result["scanned_files"] == 2
+    assert result["truncated"] is True
+    with pytest.raises(ValueError):
+        FileStore(root).search_content("needle", path="../")
+
+
+def test_content_search_skips_media_before_document_budget(tmp_path: Path) -> None:
+    for index in range(70):
+        (tmp_path / f"image-{index}.jpg").write_bytes(b"\xff\xd8\xff")
+    (tmp_path / "note.txt").write_text("the needle is here", encoding="utf-8")
+
+    result = FileStore(tmp_path).search_content("needle")
+
+    assert [item["path"] for item in result["results"]] == ["note.txt"]
+    assert result["scanned_files"] == 1
+    assert result["skipped_files"] == 70
+    assert result["truncated"] is False
+
+
+def test_content_search_marks_oversize_file_as_skipped(tmp_path: Path) -> None:
+    (tmp_path / "large.txt").write_text("many bytes", encoding="utf-8")
+    (tmp_path / "small.txt").write_text("hit", encoding="utf-8")
+
+    result = FileStore(tmp_path, max_file_bytes=4).search_content("hit")
+
+    assert [item["path"] for item in result["results"]] == ["small.txt"]
+    assert result["skipped_files"] == 1
+    assert result["truncated"] is True
+
+
+def test_content_search_snippet_uses_original_unicode_offset(tmp_path: Path) -> None:
+    (tmp_path / "unicode.txt").write_text("ß" * 100 + "needle", encoding="utf-8")
+
+    result = FileStore(tmp_path).search_content("needle")
+
+    assert "needle" in result["results"][0]["snippet"]
+
+
+def test_content_search_accounts_for_actual_size_after_file_change(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(files_module, "_MAX_CONTENT_SEARCH_BYTES", 10)
+    (tmp_path / "first.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "second.txt").write_text("x", encoding="utf-8")
+    store = FileStore(tmp_path)
+
+    def changed_file(path: str) -> dict:
+        return {"path": path, "content": "needle", "size": 11, "truncated": False}
+
+    monkeypatch.setattr(store, "read_file", changed_file)
+    result = store.search_content("needle")
+
+    assert result["scanned_files"] == 1
+    assert result["scanned_bytes"] == 11
+    assert result["skipped_files"] == 1
+    assert result["results"] == []
+    assert result["truncated"] is True
+
+
+def test_content_search_honors_file_and_byte_budgets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(files_module, "_MAX_CONTENT_SEARCH_FILES", 1)
+    (tmp_path / "first.txt").write_text("needle", encoding="utf-8")
+    (tmp_path / "second.txt").write_text("needle", encoding="utf-8")
+
+    result = FileStore(tmp_path).search_content("needle")
+
+    assert result["scanned_files"] == 1
+    assert result["truncated"] is True
+    assert len(result["results"]) == 1
+
+    monkeypatch.setattr(files_module, "_MAX_CONTENT_SEARCH_FILES", 64)
+    monkeypatch.setattr(files_module, "_MAX_CONTENT_SEARCH_BYTES", 6)
+    result = FileStore(tmp_path).search_content("needle")
+    assert result["scanned_bytes"] == 6
+    assert result["truncated"] is True
+
+
+def test_content_search_skips_oversize_candidate_and_continues(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(files_module, "_MAX_CONTENT_SEARCH_BYTES", 6)
+    (tmp_path / "large.txt").write_text("1234567", encoding="utf-8")
+    (tmp_path / "small.txt").write_text("match", encoding="utf-8")
+
+    result = FileStore(tmp_path).search_content("match")
+
+    assert [item["path"] for item in result["results"]] == ["small.txt"]
+    assert result["skipped_files"] == 1
+    assert result["truncated"] is True
+
+
+def test_content_search_reports_text_and_entry_truncation(tmp_path: Path) -> None:
+    (tmp_path / "long.txt").write_text("before needle after", encoding="utf-8")
+    clipped = FileStore(tmp_path, max_text_chars=6).search_content("needle")
+    assert clipped["results"] == []
+    assert clipped["truncated"] is True
+
+    capped = FileStore(tmp_path, max_search_entries=1).search_content("before")
+    assert capped["scanned_entries"] == 1
+    assert capped["truncated"] is False
+
+
+def test_content_search_rejects_empty_and_oversized_queries(tmp_path: Path) -> None:
+    store = FileStore(tmp_path)
+    for query in ("", "  ", "a" * 201, "a\x00b"):
+        with pytest.raises(ValueError):
+            store.search_content(query)
+
+
 def test_search_scan_cap_is_configurable(tmp_path: Path) -> None:
     for name in ("one.txt", "two.txt", "three.txt"):
         (tmp_path / name).write_text(name, encoding="utf-8")

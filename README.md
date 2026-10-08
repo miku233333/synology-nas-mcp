@@ -14,7 +14,9 @@ Synology NAS 的自架 MCP 服務。在 Container Manager 執行，透過 MCP �
 | --- | --- | --- |
 | `list_files` | 列出資料夾、分頁 | 唯讀資料夾掛載 |
 | `search_files` | 遞迴比對檔名，不分大小寫 | 唯讀資料夾掛載 |
+| `search_content` | 指定資料夾內有界搜尋文件文字，回報掃描量與截斷狀態 | 唯讀資料夾掛載 |
 | `read_file` | 讀取 UTF-8、PDF、DOCX 文字 | 唯讀資料夾掛載 |
+| `search`／`fetch` | ChatGPT 全文／檔名搜尋、讀取及可點擊來源 | Cloudflare Access 及 `MCP_SOURCE_ORIGIN` |
 | `get_system_info` | NAS 型號、版本、溫度等 | DSM 帳戶 |
 | `get_resource_usage` | CPU、記憶體、網路、磁碟 I/O | DSM 帳戶 |
 | `get_storage_info` | 磁碟及儲存空間狀態 | DSM 帳戶 |
@@ -29,7 +31,7 @@ Synology NAS 的自架 MCP 服務。在 Container Manager 執行，透過 MCP �
 | `create_download_task` | 在固定目的地建立下載 | 操作開關；受限 magnet URI |
 | `control_download_task` | 暫停、繼續目的地範圍內的任務 | 操作開關及固定目的地 |
 
-PDF 支援文字層；DOCX 擷取主文件段落。沒有 OCR、全文索引或排版還原。檔案名稱和內容以原文回傳。容器工具不回傳環境變數；下載摘要不回傳來源 URL 或帳密。
+PDF 支援文字層；DOCX 擷取主文件段落。全文搜尋可使用 NAS 本地索引；未啟用時只作即時有界掃描。沒有 OCR 或排版還原。檔案名稱和內容以原文回傳。容器工具不回傳環境變數；下載摘要不回傳來源 URL 或帳密。
 
 ## 安裝到 Synology
 
@@ -103,10 +105,16 @@ ChatGPT 功能取決於帳戶、Developer mode 與 workspace 權限。官方開�
    MCP_CF_ACCESS_ISSUER_URL=https://team.cloudflareaccess.com
    MCP_CF_ACCESS_AUDIENCE=access-app-aud-tag
    MCP_CF_ACCESS_ALLOWED_EMAILS=owner@example.com
+   MCP_SOURCE_ORIGIN=https://mcp.example.com
+   MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*,nas-mcp:*,mcp.example.com:*
    CLOUDFLARE_TUNNEL_TOKEN_FILE=/volume1/mcp-secrets-example/cloudflare-token
    ```
 
 3. 執行 `docker compose -f compose.yaml -f compose.cloudflare.yaml --profile cloudflare up -d --build`。先檢查未登入請求由 Access 回覆 OAuth challenge；登入後確認只可讀取預期的測試文件。NAS 會再次驗證 Access 傳到 origin 的身分 JWT；不要把容器主機埠另外公開。
+
+`MCP_SOURCE_ORIGIN` 是同一 Access 應用保護的公開 HTTPS 主機，須涵蓋 `/mcp` 和 `/source/*`；不設定時不提供 `search`／`fetch` 或來源頁。來源連結在瀏覽器開啟時仍須登入 Access，頁面只顯示有界擷取的文字。未啟用索引時，全文搜尋每次最多處理 64 份文件或 16 MiB，亦受單檔 2 MiB 和掃描 10,000 項的上限限制；標準 `search` 最多回傳 20 筆。如需判斷即時掃描是否完整，查看 `search_content` 的 `truncated` 並縮小資料夾範圍。
+
+大型共享資料夾可啟用 NAS 本地索引。在 NAS 建立**不位於 `NAS_SHARE_PATH` 之內**的索引目錄，由容器的 UID/GID 擁有並設為 `0700`，把絕對路徑填入 `.env` 的 `NAS_INDEX_DIR`，然後在原本的 Compose 指令加上 `-f compose.index.yaml`。索引程序每 15 分鐘更新一次；原始資料夾及 MCP 掛載仍唯讀，只有索引程序可寫索引目錄，索引檔權限為 `0600`。索引是可重建資料，不需複製到 Mac 或連續保留備份。搜尋範圍仍限於 `NAS_SHARE_PATH`；單檔讀取上限及不支援 OCR 的限制依舊適用。
 
 #### 一般 OAuth 身分供應商
 
@@ -255,7 +263,7 @@ This is a community-maintained alpha, not an official Synology integration. Clon
 
 Files are mounted read-only. DSM credentials are optional; container and download actions require explicit switches and scopes. The optional `chatgpt` Compose profile runs OpenAI's Secure MCP Tunnel using your own Platform key and tunnel ID. It does not require public NAS ports. HTTP uses a private Bearer token by default; opt-in OAuth resource-server mode supports a public HTTPS endpoint with your own identity provider. stdio also works.
 
-Reads support UTF-8 text and text extraction from PDF/DOCX, with bounded output and no OCR. Search matches filenames. Download creation accepts only restricted BTIH magnet links. NAS compatibility and ChatGPT account access require live validation. Run the commands above for local tests.
+Reads support UTF-8 text and text extraction from PDF/DOCX, with bounded output and no OCR. Filename search and bounded on-demand text search are available; authenticated source links require Cloudflare Access and an explicit HTTPS origin. Download creation accepts only restricted BTIH magnet links. NAS compatibility and ChatGPT account access require live validation. Run the commands above for local tests.
 
 ## License
 

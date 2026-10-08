@@ -1,0 +1,49 @@
+services:
+  nas-mcp:
+    volumes:
+      - type: bind
+        source: ${NAS_INDEX_DIR:?Set NAS_INDEX_DIR to a protected index directory}
+        target: /run/nas-index
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      NAS_INDEX_PATH: /run/nas-index/index.sqlite3
+
+  nas-mcp-indexer:
+    build: .
+    image: synology-nas-mcp:local
+    restart: unless-stopped
+    init: true
+    user: "${NAS_UID:-1000}:${NAS_GID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    volumes:
+      - type: bind
+        source: ${NAS_SHARE_PATH:?Set NAS_SHARE_PATH to an existing shared folder}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${NAS_INDEX_DIR:?Set NAS_INDEX_DIR to a protected index directory}
+        target: /run/nas-index
+        bind:
+          create_host_path: false
+    environment:
+      NAS_DATA_ROOT: /data
+      NAS_INDEX_PATH: /run/nas-index/index.sqlite3
+      NAS_MAX_FILE_BYTES: ${NAS_MAX_FILE_BYTES:-2097152}
+      NAS_MAX_TEXT_CHARS: ${NAS_MAX_TEXT_CHARS:-50000}
+    entrypoint: [python, -m, synology_nas_mcp.index]
+    command: [--loop]
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
